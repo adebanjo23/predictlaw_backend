@@ -1,0 +1,10 @@
+dj-database-url
+django
+django-rest
+djangorestframework
+mysqlclient
+psycopg2
+psycopg2-binary
+python-decouple
+requests
+gunicorn

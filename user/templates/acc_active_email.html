@@ -1,0 +1,14 @@
+{% autoescape off %}
+Welcome to PredictLaw !!
+
+Dear {{ user.username }},
+
+Thank you for signing up to PredictLaw. We are excited to have you on board!
+To activate your account and start exploring the world of legal predictions, please click on the link below:
+
+http://{{ domain }}{% url 'activate' uidb64=uid token=token %}
+
+If you have any questions or need assistance, feel free to contact our support team.
+Best regards,
+The PredictLaw Team
+{% endautoescape %}
