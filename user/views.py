@@ -1,5 +1,8 @@
+import os
+
 from django.contrib.auth import get_user_model
 from django.http import HttpResponse
+from dotenv import load_dotenv
 from django.shortcuts import render, redirect
 from django.utils.encoding import force_str, force_bytes
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -147,3 +150,154 @@ def user_login(request):
     except Exception as e:
         return Response({"error": str(e)}, status=HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+############################################################################################## NEW PART
+import os
+from django.conf import settings
+from dotenv import load_dotenv
+import pickle
+from PyPDF2 import PdfReader
+from langdetect import detect, LangDetectException
+from googletrans import Translator
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.llms import OpenAI
+from langchain.chains.question_answering import load_qa_chain
+from langchain.callbacks import get_openai_callback
+
+load_dotenv()
+
+UPLOAD_FOLDER = 'pdfs'
+embeddings_dir = 'embeddings'
+ALLOWED_EXTENSIONS = {'pdf'}
+
+
+def allowed_file(filename):
+    return '.' in filename and (
+            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS or filename.lower().endswith('.json'))
+
+
+@api_view(['POST'])
+def upload_pdf(request):
+    if request.method != 'POST':
+        return Response("Invalid request method", status=status.HTTP_400_BAD_REQUEST)
+
+    username = request.data.get('username')
+    pdf = request.FILES.get('pdf')
+
+    # Check if username and pdf are provided
+    if not (username and pdf):
+        return Response("Username and PDF file are required", status=status.HTTP_400_BAD_REQUEST)
+
+    # Check if the file type is allowed
+    if not allowed_file(pdf.name):
+        return Response("Invalid file type. Only PDF files are allowed", status=status.HTTP_400_BAD_REQUEST)
+
+    # Check if a file with the same username already exists
+    existing_file_path = os.path.join(settings.MEDIA_ROOT, UPLOAD_FOLDER, f"{username}.pdf")
+    if os.path.exists(existing_file_path):
+        return Response(f'A PDF file with the username {username} already exists. Delete it to upload a new one.',
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    # Save the PDF file
+    filename = f"{username}.pdf"
+    with open(os.path.join(settings.MEDIA_ROOT, UPLOAD_FOLDER, filename), 'wb') as destination:
+        for chunk in pdf.chunks():
+            destination.write(chunk)
+
+    return Response({'message': 'PDF uploaded successfully'}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+def query_pdf(request):
+    if request.method != 'POST':
+        return Response("Invalid request method", status=status.HTTP_400_BAD_REQUEST)
+
+    username = request.data.get('username')
+    query = request.data.get('question')
+
+    if not (username and query):
+        return Response("Username and question are required", status=status.HTTP_400_BAD_REQUEST)
+
+    filename = f"{username}.pdf"
+    pdf_path = os.path.join(settings.MEDIA_ROOT, UPLOAD_FOLDER, filename)
+
+    if os.path.exists(pdf_path):
+        try:
+            pdf_reader = PdfReader(pdf_path)
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+
+            # Detect language
+            try:
+                detected_language = detect(text)
+            except LangDetectException as e:
+                return Response(f'Language detection error: {str(e)}', status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            if detected_language != 'en':
+                try:
+                    translator = Translator()
+                    translated_text = translator.translate(text, src=detected_language, dest='en').text
+                    text = translated_text
+                except Exception as e:
+                    print(f"Translation error: {str(e)}")
+
+            # Split text into chunks
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=200,
+                length_function=len
+            )
+            chunks = text_splitter.split_text(text=text)
+
+            # Load or create embeddings
+            store_name = username
+            if os.path.exists(f"media/embeddings/{store_name}.pkl"):
+                with open(f"media/embeddings/{store_name}.pkl", "rb") as f:
+                    VectorStore = pickle.load(f)
+            else:
+                embeddings = OpenAIEmbeddings()
+                VectorStore = FAISS.from_texts(chunks, embedding=embeddings)
+                with open(f"media/embeddings/{store_name}.pkl", "wb") as f:
+                    pickle.dump(VectorStore, f)
+
+            # Query the model
+            docs = VectorStore.similarity_search(query=query, k=3)
+            llm = OpenAI(model_name='gpt-3.5-turbo', temperature=0.8)
+            chain = load_qa_chain(llm=llm, chain_type="stuff")
+            with get_openai_callback() as cb:
+                response = chain.run(input_documents=docs, question=query)
+            return Response({'response': response}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    else:
+        return Response('PDF not found for the given username', status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['POST'])
+def delete_pdf(request):
+    if request.method != 'POST':
+        return Response("Invalid request method", status=status.HTTP_400_BAD_REQUEST)
+
+    username = request.data.get('username')
+
+    if not username:
+        return Response("Username is required for deletion", status=status.HTTP_400_BAD_REQUEST)
+
+    filename = f"{username}.pdf"
+    pdf_path = os.path.join(settings.MEDIA_ROOT, UPLOAD_FOLDER, filename)
+    pkl_path = os.path.join(settings.MEDIA_ROOT, embeddings_dir, f"{username}.pkl")
+
+    if os.path.exists(pdf_path):
+        try:
+            os.remove(pdf_path)
+            if os.path.exists(pkl_path):
+                os.remove(pkl_path)
+            return Response({'message': f'PDF file and embedding for {username} deleted successfully'},
+                            status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    else:
+        return Response('PDF not found for the given username', status=status.HTTP_404_NOT_FOUND)
