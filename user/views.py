@@ -196,7 +196,6 @@ def upload_pdf(request):
 
     # Check if a file with the same username already exists
     existing_file_path = os.path.join(settings.MEDIA_ROOT, UPLOAD_FOLDER, f"{username}.pdf")
-    print('I got here')
     if os.path.exists(existing_file_path):
         return Response(f'A PDF file with the username {username} already exists. Delete it to upload a new one.',
                         status=status.HTTP_400_BAD_REQUEST)
