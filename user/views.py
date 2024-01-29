@@ -32,12 +32,9 @@ def signup(request):
         if not username or not phone or not email:
             return Response("All fields are required", status=status.HTTP_400_BAD_REQUEST)
 
-        print("Here")
-
         # Check if a user with the provided username or email already exists
         existing_user = User.objects.filter(Q(username=username) | Q(email=email)).first()
 
-        print("Here3")
         if existing_user:
             return Response({"error": "User with this username or email already exists"}, status=HTTP_400_BAD_REQUEST)
 
@@ -165,13 +162,14 @@ from langchain.vectorstores import FAISS
 from langchain.llms import OpenAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.callbacks import get_openai_callback
+from decouple import config
 
 load_dotenv()
 
 UPLOAD_FOLDER = 'pdfs'
 embeddings_dir = 'embeddings'
 ALLOWED_EXTENSIONS = {'pdf'}
-
+OPENAI_API_KEY = config("OPENAI_API_KEY")
 
 def allowed_file(filename):
     return '.' in filename and (
